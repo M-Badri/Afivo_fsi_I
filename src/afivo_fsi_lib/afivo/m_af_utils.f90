@@ -1,21 +1,5 @@
 #include "cpp_macros.h"
-!> This module contains all kinds of different 'helper' routines for Afivo. If
-!> the number of routines for a particular topic becomes large, they should
-!> probably be put in a separate module.
-#define NDIM 2
-#if NDIM == 2
-#define DTIMES(TXT) TXT, TXT
-#define KJI_DO(lo,hi) j = lo, hi; do i = lo, hi
-#define CLOSE_DO end do
-#define IJK i, j
-#define DIMNAME "2d"
-#elif NDIM == 3
-#define DTIMES(TXT) TXT, TXT, TXT
-#define KJI_DO(lo,hi) k = lo, hi; do j = lo, hi; do i = lo, hi
-#define CLOSE_DO end do; end do
-#define IJK i, j, k
-#define DIMNAME "3d"
-#endif
+
 module m_af_utils
   use m_af_types
 

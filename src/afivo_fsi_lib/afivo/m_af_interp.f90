@@ -2,20 +2,7 @@
 !> This module contains routines related to interpolation, which can interpolate
 !> 'to' the grid and 'from' the grid (useful for e.g. particle simulations). The
 !> interpolation for meshes is called prolongation, see m_aX_prolong.
-#define NDIM 2
-#if NDIM == 2
-#define DTIMES(TXT) TXT, TXT
-#define KJI_DO(lo,hi) j = lo, hi; do i = lo, hi
-#define CLOSE_DO end do
-#define IJK i, j
-#define DIMNAME "2d"
-#elif NDIM == 3
-#define DTIMES(TXT) TXT, TXT, TXT
-#define KJI_DO(lo,hi) k = lo, hi; do j = lo, hi; do i = lo, hi
-#define CLOSE_DO end do; end do
-#define IJK i, j, k
-#define DIMNAME "3d"
-#endif
+
 module m_af_interp
   use m_af_types
 

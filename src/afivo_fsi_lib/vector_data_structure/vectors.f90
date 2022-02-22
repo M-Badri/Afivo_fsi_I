@@ -17,7 +17,7 @@
 !     $Id: vectors.f90,v 1.4 2008/06/12 15:12:39 relaxmike Exp $
 
 type VECTOR
-    private
+!    private
     integer                                  :: no_used
     type(VECTOR_DATA), dimension(:), pointer :: data    => null()
 end type VECTOR

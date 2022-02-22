@@ -1,6 +1,17 @@
-third_party/
+
 BU/
 output/
 obj/
 bin/
+*.layout
+*.depend
+*.cbp
+Makefile_org
 
+
+external_libs/
+!external_libs/build_externals
+!external_libs/build_hypre.sh
+!external_libs/build_silo.sh
+!external_libs/hypre-2.11.2.tar.gz
+!external_libs/silo-4.10.2-bsd-smalltest.tar.gz

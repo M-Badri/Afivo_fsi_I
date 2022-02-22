@@ -9,16 +9,16 @@ contains
         implicit none
 
         integer(kind=I4) :: n, nn, nnn
-        real(kind=R8) :: ave(n_smoothed_var), domination
+        real(kind=R8)    :: ave(n_smoothed_var), domination
 
-        call af_loop_box (tree, nullify_ext_forces_ker)
+        call af_loop_box( tree, nullify_ext_forces_ker )
 
         distance_matrix_glb = max_distance
         do n = 1, this%nobjs
             this%objects(n)%ext_force(1) = 0.0_R8
             this%objects(n)%ext_force(2) = 0.0_R8
-            call this%objects(n)%get_object_ext_force (tree, this%nobjs,                 &
-            &  [i_unew, i_vnew, n, i_df])
+            call this%objects(n)%get_object_ext_force( tree, this%nobjs,                 &
+            &  [i_unew, i_vnew, n, i_df] )
 
 !            data_holder_2(1:3, 1:n_smoothed_var-1)=data_holder_1(1:3, 1:n_smoothed_var-1)
 !            data_holder_1(1:3, 2:n_smoothed_var)  =data_holder_2(1:3, 1:n_smoothed_var-1)
@@ -57,52 +57,52 @@ contains
 
         subroutine  get_object_ib_ext_force_ker (tree, id)
             implicit none
-            type(af_t), intent(inout) :: tree
-            integer(kind=I4), intent(in) :: id
-            integer(kind=I4) :: nc, i, j, ii, n
-            integer(kind=I4), allocatable :: tags(DTIMES(:))
-            integer(kind=I4) :: next_point(NDIM), ehat(NDIM)
-            integer(kind=I4) :: n_s, n_f, n_p
-            logical :: are_all_available
-            logical :: is_added
-            real(kind=R8), allocatable :: cc (DTIMES(:), :)
-            real(kind=R8) :: x_forcing(NDIM, 1), x_gama(NDIM), xyz(NDIM, 1)
-            real(kind=R8) :: x_point(NDIM, 1), r(NDIM)
-            real(kind=R8) :: inv_2dr(NDIM), normal(NDIM)
-            real(kind=R8) :: poly(ns), poly_vec(2*ns), poly_p(ns) ! MLS
-            real(kind=R8) :: inv_dt
-            real(kind=R8) :: tmp_scord(NDIM, 8), tmp_svel(NDIM, 8)
-            real(kind=R8) :: tmp_fcord(NDIM, 8), tmp_fvel(NDIM, 8)
-            real(kind=R8) :: tmp_p_scord(NDIM, 8), tmp_p_sval(8)
-            real(kind=R8) :: tmp_p_fcord(NDIM, 8), tmp_p_fval(8)
-            real(kind=R8) :: base_normal(NDIM)
-            real(kind=R8), allocatable :: cordinates(:, :), velocities(:, :)
-            real(kind=R8), allocatable :: cordinatesP(:, :), valuesP(:), tmp(:)
-            real(kind=R8) :: dis
-            real(kind=R8) :: da
-            real(kind=R8) :: beta, prov_vel(NDIM)
-            real(kind=R8), allocatable :: distance_matrix_loc(:, :)
-            real(kind=R8) :: ex_force(NDIM), ex_momont, actual_vel(NDIM)
+            type(af_t),       intent(inout) :: tree
+            integer(kind=I4), intent(in)    :: id
+            integer(kind=I4)                :: nc, i, j, ii, n
+            integer(kind=I4), allocatable   :: tags(DTIMES(:))
+            integer(kind=I4)                :: next_point(NDIM), ehat(NDIM)
+            integer(kind=I4)                :: n_s, n_f, n_p
+            logical                         :: are_all_available
+            logical                         :: is_added
+            real(kind=R8),    allocatable   :: cc (DTIMES(:), :)
+            real(kind=R8)                   :: x_forcing(NDIM, 1), x_gama(NDIM), xyz(NDIM, 1)
+            real(kind=R8)                   :: x_point(NDIM, 1), r(NDIM)
+            real(kind=R8)                   :: inv_2dr(NDIM), normal(NDIM)
+            real(kind=R8)                   :: poly(ns), poly_vec(2*ns), poly_p(ns) ! MLS
+            real(kind=R8)                   :: inv_dt
+            real(kind=R8)                   :: tmp_scord(NDIM, 8), tmp_svel(NDIM, 8)
+            real(kind=R8)                   :: tmp_fcord(NDIM, 8), tmp_fvel(NDIM, 8)
+            real(kind=R8)                   :: tmp_p_scord(NDIM, 8), tmp_p_sval(8)
+            real(kind=R8)                   :: tmp_p_fcord(NDIM, 8), tmp_p_fval(8)
+            real(kind=R8)                   :: base_normal(NDIM)
+            real(kind=R8),     allocatable  :: cordinates(:, :), velocities(:, :)
+            real(kind=R8),     allocatable  :: cordinatesP(:, :), valuesP(:), tmp(:)
+            real(kind=R8)                   :: dis
+            real(kind=R8)                   :: da
+            real(kind=R8)                   :: beta, prov_vel(NDIM)
+            real(kind=R8),      allocatable :: distance_matrix_loc(:, :)
+            real(kind=R8)                   :: ex_force(NDIM), ex_momont, actual_vel(NDIM)
 
             nc = tree%boxes(id)%n_cell
-            allocate (cordinates(NDIM, 1), velocities(NDIM, 1))
-            allocate (cordinatesP(NDIM,1), valuesP(1), tmp(1))
-            allocate (cc(DTIMES(-1:nc+2), size(i_var)+2 ))
-            allocate (tags(DTIMES(-1:nc+2)))
-            call af_gc2_box (tree, id, [i_df+i_var(3)-1, i_var(1), i_var(2), i_p], cc)
+            allocate( cordinates(NDIM, 1), velocities(NDIM, 1) )
+            allocate( cordinatesP(NDIM,1), valuesP(1), tmp(1) )
+            allocate( cc(DTIMES(-1:nc+2), size(i_var)+2 ) )
+            allocate( tags(DTIMES(-1:nc+2)) )
+            call af_gc2_box( tree, id, [i_df+i_var(3)-1, i_var(1), i_var(2), i_p], cc )
 
 
             tags = outside
             is_added = .false.
             inv_dt = 1.0_dp / dt
-            dis = norm2(tree%boxes(id)%dr )
+            dis = norm2( tree%boxes(id)%dr )
             da = tree%boxes(id)%dr(1) * tree%boxes(id)%dr(2)
 
             ex_force  = 0.0_R8
             ex_momont = 0.0_R8
 
 !            if (allocated(distance_matrix_loc)) deallocate (distance_matrix_loc)
-            allocate (distance_matrix_loc, source = distance_matrix_glb)
+            allocate( distance_matrix_loc, source = distance_matrix_glb )
 !            distance_matrix_loc =  max_distance
 
             do j = 1, nc
@@ -308,20 +308,20 @@ contains
                                 tmp_p_fval(n_p) = cc(next_point(1), next_point(2), 4)
                             end if
 
-                            deallocate (cordinates, velocities, cordinatesP, valuesP, tmp)
-                            allocate (velocities(NDIM, n_s+n_f))
-                            allocate (cordinates(NDIM, n_s+n_f))
-                            allocate (cordinatesP(NDIM, 1+n_p))
-                            allocate (valuesP(1+n_p))
-                            allocate (tmp(2*(n_s+n_f)))
+                            deallocate( cordinates, velocities, cordinatesP, valuesP, tmp )
+                            allocate( velocities(NDIM, n_s+n_f) )
+                            allocate( cordinates(NDIM, n_s+n_f) )
+                            allocate( cordinatesP(NDIM, 1+n_p) )
+                            allocate( valuesP(1+n_p) )
+                            allocate( tmp(2*(n_s+n_f)) )
                             velocities(:, 1:n_s)         = tmp_svel(:, 1:n_s)
                             velocities(:, n_s+1:n_f+n_s) = tmp_fvel(:, 1:n_f)
                             cordinates(:, 1:n_s)         = tmp_scord(:, 1:n_s)
                             cordinates(:, n_s+1:n_f+n_s) = tmp_fcord(:, 1:n_f)
-                            valuesP(1)       = tmp_p_sval(1)
-                            valuesP(2:n_p+1) = tmp_p_fval(1:n_p)
-                            cordinatesP(:, 1)       = tmp_p_scord(:, 1)
-                            cordinatesP(:, 2:n_p+1) = tmp_p_fcord(:, 1:n_p)
+                            valuesP(1)                   = tmp_p_sval(1)
+                            valuesP(2:n_p+1)             = tmp_p_fval(1:n_p)
+                            cordinatesP(:, 1)            = tmp_p_scord(:, 1)
+                            cordinatesP(:, 2:n_p+1)      = tmp_p_fcord(:, 1:n_p)
 
 !                            do ii = 1, size(tmp) / 2
 !                                tmp((2*ii))   = velocities(2, ii)
@@ -339,8 +339,8 @@ contains
                             beta = cc(i, j, 1) / tree%boxes(id)%dr(1)
 
                             poly(:) = &
-                            mls_get_scalar_dir (n_s+n_f, cordinates, velocities(1, :),   &
-                                                x_forcing(1,1), x_forcing(2,1))
+                            mls_get_scalar_dir( n_s+n_f, cordinates, velocities(1, :),   &
+                                                x_forcing(1,1), x_forcing(2,1) )
 
                             prov_vel(1) = (beta * tree%boxes(id)%cc(i, j, i_var(1))) +   &
                                           ((1.d0 - beta) * poly(1))
@@ -350,14 +350,14 @@ contains
 !                            + tree%boxes(id)%cc(i, j, i_resx)
 
                             poly(:) = &
-                            mls_get_scalar_dir (n_s+n_f, cordinates, velocities(2, :),   &
-                                                x_forcing(1,1), x_forcing(2,1))
+                            mls_get_scalar_dir( n_s+n_f, cordinates, velocities(2, :),   &
+                                                x_forcing(1,1), x_forcing(2,1) )
 
                             prov_vel(2) = (beta * tree%boxes(id)%cc(i, j, i_var(2))) +   &
-                            &  ((1.d0 - beta) * poly(1))
+                            &             ((1.d0 - beta) * poly(1))
 
                             tree%boxes(id)%cc(i, j, i_ibfy) =                            &
-                            ((prov_vel(2) - tree%boxes(id)%cc(i, j, i_var(2))) * inv_dt)  !&
+                                 ((prov_vel(2) - tree%boxes(id)%cc(i, j, i_var(2))) * inv_dt)  !&
 !                            + tree%boxes(id)%cc(i, j, i_resy)
 
                              !> Gets the distance of this object with the others as well
@@ -365,20 +365,20 @@ contains
 !                            do n = 1, nobjects + nwalls
 !                                if (n==this%id) cycle
 !                            end do
-                            if ( abs(x_forcing(1,1) - 0.0_R8)  <=                        &
-                            &  distance_matrix_loc(this%id, nobjects+1)) then
-                                distance_matrix_loc(this%id, nobjects+1) =               &
-                                &  abs(x_forcing(1,1) - 0.0_R8)
+                            if ( abs(x_forcing(1,1) - 0.0_R8 )  <=                       &
+                               distance_matrix_loc(this%id, nobjects+1)) then
+                               distance_matrix_loc(this%id, nobjects+1) =                &
+                               abs( x_forcing(1,1) - 0.0_R8 )
                             end if
 
-                            if (abs(x_forcing(1,1) - domain_len(1))  <=                  &
+                            if (abs( x_forcing(1,1) - domain_len(1) )  <=                &
                             & distance_matrix_loc(this%id, nobjects+2)) then
                                 distance_matrix_loc(this%id, nobjects+2) =               &
-                                &  abs(x_forcing(1,1) - domain_len(1))
+                                &  abs( x_forcing(1,1) - domain_len(1) )
                             end if
 
                             !$omp critical
-                            if ( abs(x_forcing(2,1) - 0.0_R8)  <                        &
+                            if ( abs(x_forcing(2,1) - 0.0_R8 )  <                        &
                             &  distance_matrix_loc(this%id, nobjects+3)) then
 
 
@@ -392,10 +392,10 @@ contains
                             !$omp end critical
 
 
-                            if (abs(x_forcing(2,1) - domain_len(2))  <=                  &
-                            &  distance_matrix_loc(this%id, nobjects+4)) then
+                            if ( abs( x_forcing(2,1) - domain_len(2))  <=                &
+                            &  distance_matrix_loc(this%id, nobjects+4) ) then
                                 distance_matrix_loc(this%id, nobjects+4) =               &
-                                &  abs(x_forcing(2,1) - domain_len(2))
+                                &  abs( x_forcing(2,1) - domain_len(2) )
                             end if
 
 !                             print*,  distance_matrix_loc(this%id, nobjects+3), x_forcing(2,1)
@@ -403,8 +403,8 @@ contains
                             !> Accumulates the forces calculated on immersed surface into
                             !  the Drag and lift already contains the value from inside
                             !  the object.
-                            if (tree%boxes(id)%lvl == tree%highest_lvl) then
-                                xyz(:, 1) = af_r_cc (tree%boxes(id), [IJK])
+                            if ( tree%boxes(id)%lvl == tree%highest_lvl) then
+                                xyz(:, 1) = af_r_cc (tree%boxes(id), [IJK] )
                                 r(:) = xyz(:, 1) - this%xc(:)
 
                                 ex_force(1) = ex_force(1) -                              &
@@ -471,10 +471,10 @@ contains
 
 
 
-    subroutine nullify_ext_forces_ker(box)
+    subroutine nullify_ext_forces_ker( box )
         implicit none
         type(box_t), intent(inout) :: box
-        integer(kind=I4) :: nc, i, j
+        integer(kind=I4)           :: nc, i, j
 
         nc = box%n_cell
         do j = 1, nc
@@ -500,8 +500,8 @@ contains
 
     module procedure write_out_ext_force
         implicit none
-        call write_ext_forces_on_hard(i_obj, field_time,                                 &
-        &  this%ext_force(1), this%ext_force(2), this%moment)
+        call write_ext_forces_on_hard( i_obj, field_time,                                &
+        &  this%ext_force(1), this%ext_force(2), this%moment )
     end procedure write_out_ext_force
 
 
@@ -511,7 +511,7 @@ contains
         integer(kind=I4) :: n
 
         do n = 1, this%nobjs
-            call this%objects(n)%write_out_object_energy (n)
+            call this%objects(n)%write_out_object_energy( n )
         end do
     end procedure write_out_objects_energy
 
@@ -519,7 +519,7 @@ contains
 
     module procedure write_out_object_energy
         implicit none
-        call write_enery_of_object_on_hard(i_obj, field_time, this%et, this%er)
+        call write_enery_of_object_on_hard( i_obj, field_time, this%et, this%er )
     end procedure write_out_object_energy
 
 
@@ -529,7 +529,7 @@ contains
         integer(kind=I4) :: n
 
         do n = 1, this%nobjs
-            call this%objects(n)%write_out_object_reynolds (n)
+            call this%objects(n)%write_out_object_reynolds( n )
         end do
     end procedure write_out_objects_reynolds
 
@@ -537,7 +537,7 @@ contains
 
     module procedure write_out_object_reynolds
         implicit none
-        call  write_reynolds_of_object_on_hard(i_obj, field_time, this%rey)
+        call  write_reynolds_of_object_on_hard( i_obj, field_time, this%rey )
     end procedure write_out_object_reynolds
 
 end submodule  ext_force

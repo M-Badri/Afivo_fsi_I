@@ -1,20 +1,7 @@
 #include "cpp_macros.h"
 !> This module contains routines for writing output files with Afivo. The Silo
 !> format should probably be used for larger files, especially in 3D.
-#define NDIM 2
-#if NDIM == 2
-#define DTIMES(TXT) TXT, TXT
-#define KJI_DO(lo,hi) j = lo, hi; do i = lo, hi
-#define CLOSE_DO end do
-#define IJK i, j
-#define DIMNAME "2d"
-#elif NDIM == 3
-#define DTIMES(TXT) TXT, TXT, TXT
-#define KJI_DO(lo,hi) k = lo, hi; do j = lo, hi; do i = lo, hi
-#define CLOSE_DO end do; end do
-#define IJK i, j, k
-#define DIMNAME "3d"
-#endif
+
 module m_af_output
 
   use m_af_types
@@ -48,7 +35,7 @@ module m_af_output
   public :: af_read_tree
   public :: af_tree_copy_variable
   public :: af_write_vtk
-  public :: af_write_silo
+!  public :: af_write_silo
   public :: af_write_line
   public :: af_write_plane
 
@@ -653,446 +640,446 @@ contains
 
   !> Write the cell centered data of a tree to a Silo file. Only the
   !> leaves of the tree are used
-  subroutine af_write_silo(tree, filename, n_cycle, time, ixs_cc, dir, &
-       add_vars, add_names)
-    use m_write_silo
-
-    type(af_t), intent(in)       :: tree        !< Tree to write out
-    character(len=*)              :: filename    !< Filename for the vtk file
-    integer, intent(in), optional :: n_cycle     !< Cycle-number for vtk file (counter)
-    real(dp), intent(in), optional :: time        !< Time for output file
-    integer, intent(in), optional :: ixs_cc(:)      !< Oncly include these cell variables
-    character(len=*), optional, intent(in) :: dir !< Directory to place files in
-    procedure(subr_add_vars), optional :: add_vars !< Optional routine to add extra variables
-    character(len=*), intent(in), optional :: add_names(:) !< Names of extra variables
-
-    character(len=*), parameter     :: grid_name = "gg", block_prefix = "blk_"
-    character(len=*), parameter     :: amr_name  = "mesh", meshdir = "data"
-    character(len=100), allocatable :: grid_list(:), grid_list_block(:)
-    character(len=100), allocatable :: var_list(:, :), var_names(:)
-    character(len=400)              :: fname
-    integer                         :: lvl, i, id, i_grid, iv, nc, n_grids_max
-    integer                         :: n_cc, n_add, dbix
-    integer                         :: nx, ny, nx_prev, ny_prev, ix, iy
-    integer                         :: n_cycle_val
-    integer                         :: lo(NDIM), hi(NDIM), vlo(NDIM), vhi(NDIM)
-    integer                         :: blo(NDIM), bhi(NDIM)
-    logical                         :: lo_bnd(NDIM), hi_bnd(NDIM)
-    integer, allocatable            :: ids(:), nb_ids(:), icc_val(:)
-    logical, allocatable            :: box_done(:)
-    real(dp)                        :: dr(NDIM), r_min(NDIM), time_val
-#if NDIM == 2
-    integer, allocatable            :: box_list(:,:), new_box_list(:, :)
-    real(dp), allocatable           :: var_data(:,:,:), cc(:, :, :)
-#elif NDIM == 3
-    integer, allocatable            :: box_list(:,:,:), new_box_list(:,:,:)
-    real(dp), allocatable           :: var_data(:,:,:,:), cc(:, :, :, :)
-    integer                         :: nz, nz_prev, iz
-#endif
-
-    if (.not. tree%ready) stop "Tree not ready"
-    time_val = 0.0_dp; if (present(time)) time_val = time
-    n_cycle_val = 0; if (present(n_cycle)) n_cycle_val = n_cycle
-    n_add = 0; if (present(add_names)) n_add = size(add_names)
-
-    if (present(add_names) .neqv. present(add_vars)) &
-         stop "af_write_vtk: both arguments (add_names, add_vars) needed"
-
-    if (present(ixs_cc)) then
-       if (maxval(ixs_cc) > tree%n_var_cell .or. &
-            minval(ixs_cc) < 1) stop "af_write_silo: wrong indices given (ixs_cc)"
-       allocate(icc_val(size(ixs_cc)))
-       icc_val = ixs_cc
-    else
-       call get_output_vars(tree, icc_val)
-    end if
-
-    n_cc = size(icc_val)
-
-    allocate(var_names(n_cc+n_add))
-    var_names(1:n_cc) = tree%cc_names(icc_val)
-
-    if (present(add_names)) then
-       var_names(n_cc+1:n_cc+n_add) = add_names(:)
-    end if
-
-    nc = tree%n_cell
-    n_grids_max = 0
-    do lvl = 1, tree%highest_lvl
-       n_grids_max = n_grids_max + size(tree%lvls(lvl)%leaves)
-    end do
-
-    allocate(grid_list(n_grids_max))
-    allocate(grid_list_block(n_grids_max))
-    allocate(var_list(n_cc+n_add, n_grids_max))
-    allocate(box_done(tree%highest_id))
-    box_done = .false.
-
-#if NDIM == 2
-    allocate(cc(0:nc+1, 0:nc+1, n_cc + n_add))
-#elif NDIM == 3
-    allocate(cc(0:nc+1, 0:nc+1, 0:nc+1, n_cc + n_add))
-#endif
-
-    call af_prepend_directory(trim(filename) // ".silo", dir, fname)
-    call SILO_create_file(trim(fname), dbix)
-    call SILO_set_time_varying(dbix)
-    call SILO_mkdir(dbix, meshdir)
-    i_grid = 0
-
-    do lvl = 1, tree%highest_lvl
-       do i = 1, size(tree%lvls(lvl)%leaves)
-          id = tree%lvls(lvl)%leaves(i)
-          if (box_done(id)) cycle
-
-          i_grid = i_grid + 1
-
-          ! Find largest rectangular box including id and other leaves that
-          ! haven't been written yet
-#if NDIM == 2
-          allocate(box_list(1,1))
-          box_list(1,1) = id
-          box_done(id) = .true.
-          nx = 1
-          ny = 1
-
-          do
-             nx_prev = nx
-             ny_prev = ny
-
-             ! Check whether we can extend to the -x direction
-             ids = box_list(1, :)
-             nb_ids = tree%boxes(ids)%neighbors(af_neighb_lowx)
-             if (all(nb_ids > af_no_box)) then
-                if (.not. any(box_done(nb_ids)) .and. &
-                     tree%boxes(nb_ids(1))%ix(1) < tree%boxes(ids(1))%ix(1) .and. &
-                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
-                   nx = nx + 1
-                   allocate(new_box_list(nx, ny))
-                   new_box_list(1, :) = nb_ids
-                   new_box_list(2:, :) = box_list
-                   box_list = new_box_list
-                   box_done(nb_ids) = .true.
-                   deallocate(new_box_list)
-                end if
-             end if
-
-             ! Check whether we can extend to the +x direction
-             ids = box_list(nx, :)
-             nb_ids = tree%boxes(ids)%neighbors(af_neighb_highx)
-             if (all(nb_ids > af_no_box)) then
-                if (.not. any(box_done(nb_ids)) .and. &
-                     tree%boxes(nb_ids(1))%ix(1) > tree%boxes(ids(1))%ix(1) .and. &
-                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
-                   nx = nx + 1
-                   allocate(new_box_list(nx, ny))
-                   new_box_list(nx, :) = nb_ids
-                   new_box_list(1:nx-1, :) = box_list
-                   box_list = new_box_list
-                   box_done(nb_ids) = .true.
-                   deallocate(new_box_list)
-                end if
-             end if
-
-             ! Check whether we can extend to the -y direction
-             ids = box_list(:, 1)
-             nb_ids = tree%boxes(ids)%neighbors(af_neighb_lowy)
-             if (all(nb_ids > af_no_box)) then
-                if (.not. any(box_done(nb_ids)) .and. &
-                     tree%boxes(nb_ids(1))%ix(2) < tree%boxes(ids(1))%ix(2) .and. &
-                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
-                   ny = ny + 1
-                   allocate(new_box_list(nx, ny))
-                   new_box_list(:, 1) = nb_ids
-                   new_box_list(:, 2:) = box_list
-                   box_list = new_box_list
-                   box_done(nb_ids) = .true.
-                   deallocate(new_box_list)
-                end if
-             end if
-
-             ! Check whether we can extend to the +y direction
-             ids = box_list(:, ny)
-             nb_ids = tree%boxes(ids)%neighbors(af_neighb_highy)
-             if (all(nb_ids > af_no_box)) then
-                if (.not. any(box_done(nb_ids)) .and. &
-                     tree%boxes(nb_ids(1))%ix(2) > tree%boxes(ids(1))%ix(2) .and. &
-                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
-                   ny = ny + 1
-                   allocate(new_box_list(nx, ny))
-                   new_box_list(:, ny) = nb_ids
-                   new_box_list(:, 1:ny-1) = box_list
-                   box_list = new_box_list
-                   box_done(nb_ids) = .true.
-                   deallocate(new_box_list)
-                end if
-             end if
-
-             if (nx == nx_prev .and. ny == ny_prev) exit
-          end do
-
-          ! Check for (periodic) boundaries (this could give problems for
-          ! complex geometries, e.g. a triangle block)
-          id     = box_list(1, 1)
-          lo_bnd = af_is_phys_boundary(tree%boxes, id, af_low_neighbs)
-
-          id = box_list(nx, ny)
-          hi_bnd = af_is_phys_boundary(tree%boxes, id, af_high_neighbs)
-
-          lo(:) = 1
-          where (.not. lo_bnd) lo = lo - 1
-
-          hi = [nx, ny] * nc
-          where (.not. hi_bnd) hi = hi + 1
-
-          ! Include ghost cells around internal boundaries
-          allocate(var_data(lo(1):hi(1), lo(2):hi(2), n_cc+n_add))
-
-          do ix = 1, nx
-             do iy = 1, ny
-                id = box_list(ix, iy)
-
-                cc(:, :, 1:n_cc) = tree%boxes(id)%cc(:, :, icc_val)
-                if (present(add_vars)) then
-                   call add_vars(tree%boxes(id), &
-                        cc(:, :, n_cc+1:n_cc+n_add), n_add)
-                end if
-
-                ! Include ghost cells on internal block boundaries
-                blo = 1
-                where ([ix, iy] == 1 .and. .not. lo_bnd) blo = 0
-
-                bhi = nc
-                where ([ix, iy] == [nx, ny] .and. .not. hi_bnd) bhi = nc+1
-
-                vlo = blo + ([ix, iy]-1) * nc
-                vhi = bhi + ([ix, iy]-1) * nc
-
-                var_data(vlo(1):vhi(1), vlo(2):vhi(2), :) = &
-                     cc(blo(1):bhi(1), blo(2):bhi(2), :)
-             end do
-          end do
-
-          id = box_list(1, 1)
-          dr = tree%boxes(id)%dr
-          r_min = tree%boxes(id)%r_min - (1 - lo) * dr
-
-          write(grid_list(i_grid), "(A,I0)") meshdir // '/' // grid_name, i_grid
-          call SILO_add_grid(dbix, grid_list(i_grid), 2, &
-               hi - lo + 2, r_min, dr, 1-lo, hi - [nx, ny] * nc)
-          write(grid_list_block(i_grid), "(A,I0)") meshdir // '/' // block_prefix &
-               // grid_name, i_grid
-          call SILO_add_grid(dbix, grid_list_block(i_grid), 2, [nx+1, ny+1], &
-               tree%boxes(id)%r_min, nc*dr, [0, 0], [0, 0])
-
-          do iv = 1, n_cc+n_add
-             write(var_list(iv, i_grid), "(A,I0)") meshdir // '/' // &
-                  trim(var_names(iv)) // "_", i_grid
-             call SILO_add_var(dbix, var_list(iv, i_grid), grid_list(i_grid), &
-                  pack(var_data(:, :, iv), .true.), hi-lo+1)
-          end do
-
-          deallocate(var_data)
-          deallocate(box_list)
-#elif NDIM == 3
-          allocate(box_list(1,1,1))
-          box_list(1,1,1) = id
-          nx = 1
-          ny = 1
-          nz = 1
-
-          do
-             nx_prev = nx
-             ny_prev = ny
-             nz_prev = nz
-
-             ! Check whether we can extend to the -x direction
-             ids = pack(box_list(1, :, :), .true.)
-             nb_ids = tree%boxes(ids)%neighbors(af_neighb_lowx)
-             if (all(nb_ids > af_no_box)) then
-                if (.not. any(box_done(nb_ids)) .and. &
-                     tree%boxes(nb_ids(1))%ix(1) < tree%boxes(ids(1))%ix(1) .and. &
-                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
-                   nx = nx + 1
-                   allocate(new_box_list(nx, ny, nz))
-                   new_box_list(1, :, :) = reshape(nb_ids, [ny, nz])
-                   new_box_list(2:, :, :) = box_list
-                   box_list = new_box_list
-                   box_done(nb_ids) = .true.
-                   deallocate(new_box_list)
-                end if
-             end if
-
-             ! Check whether we can extend to the +x direction
-             ids = pack(box_list(nx, :, :), .true.)
-             nb_ids = tree%boxes(ids)%neighbors(af_neighb_highx)
-             if (all(nb_ids > af_no_box)) then
-                if (.not. any(box_done(nb_ids)) .and. &
-                     tree%boxes(nb_ids(1))%ix(1) > tree%boxes(ids(1))%ix(1) .and. &
-                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
-                   nx = nx + 1
-                   allocate(new_box_list(nx, ny, nz))
-                   new_box_list(nx, :, :) = reshape(nb_ids, [ny, nz])
-                   new_box_list(1:nx-1, :, :) = box_list
-                   box_list = new_box_list
-                   box_done(nb_ids) = .true.
-                   deallocate(new_box_list)
-                end if
-             end if
-
-             ! Check whether we can extend to the -y direction
-             ids = pack(box_list(:, 1, :), .true.)
-             nb_ids = tree%boxes(ids)%neighbors(af_neighb_lowy)
-             if (all(nb_ids > af_no_box)) then
-                if (.not. any(box_done(nb_ids)) .and. &
-                     tree%boxes(nb_ids(1))%ix(2) < tree%boxes(ids(1))%ix(2) .and. &
-                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
-                   ny = ny + 1
-                   allocate(new_box_list(nx, ny, nz))
-                   new_box_list(:, 1, :) = reshape(nb_ids, [nx, nz])
-                   new_box_list(:, 2:, :) = box_list
-                   box_list = new_box_list
-                   box_done(nb_ids) = .true.
-                   deallocate(new_box_list)
-                end if
-             end if
-
-             ! Check whether we can extend to the +y direction
-             ids = pack(box_list(:, ny, :), .true.)
-             nb_ids = tree%boxes(ids)%neighbors(af_neighb_highy)
-             if (all(nb_ids > af_no_box)) then
-                if (.not. any(box_done(nb_ids)) .and. &
-                     tree%boxes(nb_ids(1))%ix(2) > tree%boxes(ids(1))%ix(2) .and. &
-                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
-                   ny = ny + 1
-                   allocate(new_box_list(nx, ny, nz))
-                   new_box_list(:, ny, :) = reshape(nb_ids, [nx, nz])
-                   new_box_list(:, 1:ny-1, :) = box_list
-                   box_list = new_box_list
-                   box_done(nb_ids) = .true.
-                   deallocate(new_box_list)
-                end if
-             end if
-
-             ! Check whether we can extend to the -z direction
-             ids = pack(box_list(:, :, 1), .true.)
-             nb_ids = tree%boxes(ids)%neighbors(af_neighb_lowz)
-             if (all(nb_ids > af_no_box)) then
-                if (.not. any(box_done(nb_ids)) .and. &
-                     tree%boxes(nb_ids(1))%ix(3) < tree%boxes(ids(1))%ix(3) .and. &
-                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
-                   nz = nz + 1
-                   allocate(new_box_list(nx, ny, nz))
-                   new_box_list(:, :, 1) = reshape(nb_ids, [nx, ny])
-                   new_box_list(:, :, 2:) = box_list
-                   box_list = new_box_list
-                   box_done(nb_ids) = .true.
-                   deallocate(new_box_list)
-                end if
-             end if
-
-             ! Check whether we can extend to the +z direction
-             ids = pack(box_list(:, :, nz), .true.)
-             nb_ids = tree%boxes(ids)%neighbors(af_neighb_highz)
-             if (all(nb_ids > af_no_box)) then
-                if (.not. any(box_done(nb_ids)) .and. &
-                     tree%boxes(nb_ids(1))%ix(3) > tree%boxes(ids(1))%ix(3) .and. &
-                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
-                   nz = nz + 1
-                   allocate(new_box_list(nx, ny, nz))
-                   new_box_list(:, :, nz) = reshape(nb_ids, [nx, ny])
-                   new_box_list(:, :, 1:nz-1) = box_list
-                   box_list = new_box_list
-                   box_done(nb_ids) = .true.
-                   deallocate(new_box_list)
-                end if
-             end if
-
-             if (nx == nx_prev .and. ny == ny_prev .and. nz == nz_prev) exit
-          end do
-
-          ! Check for (periodic) boundaries (this could give problems for
-          ! complex geometries, e.g. a triangle block)
-          id     = box_list(1, 1, 1)
-          lo_bnd = af_is_phys_boundary(tree%boxes, id, af_low_neighbs)
-
-          id = box_list(nx, ny, nz)
-          hi_bnd = af_is_phys_boundary(tree%boxes, id, af_high_neighbs)
-
-          lo(:) = 1
-          where (.not. lo_bnd) lo = lo - 1
-
-          hi = [nx, ny, nz] * nc
-          where (.not. hi_bnd) hi = hi + 1
-
-          ! Include ghost cells around internal boundaries
-          allocate(var_data(lo(1):hi(1), lo(2):hi(2), lo(3):hi(3), n_cc+n_add))
-
-          do iz = 1, nz
-             do ix = 1, nx
-                do iy = 1, ny
-                   id     = box_list(ix, iy, iz)
-                   cc(:, :, :, 1:n_cc) = tree%boxes(id)%cc(:, :, :, icc_val)
-                   if (present(add_vars)) then
-                      call add_vars(tree%boxes(id), &
-                           cc(:, :, :, n_cc+1:n_cc+n_add), n_add)
-                   end if
-
-                   ! Include ghost cells on internal block boundaries
-                   blo = 1
-                   where ([ix, iy, iz] == 1 .and. .not. lo_bnd) blo = 0
-
-                   bhi = nc
-                   where ([ix, iy, iz] == [nx, ny, nz] &
-                        .and. .not. hi_bnd) bhi = nc+1
-
-                   vlo = blo + ([ix, iy, iz]-1) * nc
-                   vhi = bhi + ([ix, iy, iz]-1) * nc
-
-                   var_data(vlo(1):vhi(1), vlo(2):vhi(2), vlo(3):vhi(3), :) = &
-                        cc(blo(1):bhi(1), blo(2):bhi(2), blo(3):bhi(3), :)
-                end do
-             end do
-          end do
-
-          id = box_list(1, 1, 1)
-          dr = tree%boxes(id)%dr
-          r_min = tree%boxes(id)%r_min - (1 - lo) * dr
-
-          write(grid_list(i_grid), "(A,I0)") meshdir // '/' // grid_name, i_grid
-          call SILO_add_grid(dbix, grid_list(i_grid), 3, &
-               hi - lo + 2, r_min, dr, 1-lo, hi-[nx, ny, nz]*nc)
-          write(grid_list_block(i_grid), "(A,I0)") meshdir // '/' // block_prefix // &
-               grid_name, i_grid
-          call SILO_add_grid(dbix, grid_list_block(i_grid), 3, [nx+1, ny+1, nz+1], &
-               tree%boxes(id)%r_min, nc*dr, [0, 0, 0], [0, 0, 0])
-
-          do iv = 1, n_cc+n_add
-             write(var_list(iv, i_grid), "(A,I0)") meshdir // '/' // &
-                  trim(var_names(iv)) // "_", i_grid
-             call SILO_add_var(dbix, var_list(iv, i_grid), grid_list(i_grid), &
-                  pack(var_data(:, :, :, iv), .true.), hi-lo+1)
-          end do
-
-          deallocate(var_data)
-          deallocate(box_list)
-#endif
-
-       end do
-    end do
-
-    call SILO_set_mmesh_grid(dbix, amr_name, grid_list(1:i_grid), &
-         n_cycle_val, time_val)
-    do iv = 1, n_cc+n_add
-       call SILO_set_mmesh_var(dbix, trim(var_names(iv)), amr_name, &
-            var_list(iv, 1:i_grid), n_cycle_val, time_val)
-    end do
-
-    call SILO_set_mmesh_grid(dbix, block_prefix // amr_name, &
-         grid_list_block(1:i_grid), n_cycle_val, time_val)
-    call SILO_close_file(dbix)
-    print *, "af_write_silo: written " // trim(fname)
-  end subroutine af_write_silo
+!  subroutine af_write_silo(tree, filename, n_cycle, time, ixs_cc, dir, &
+!       add_vars, add_names)
+!    use m_write_silo
+!
+!    type(af_t), intent(in)       :: tree        !< Tree to write out
+!    character(len=*)              :: filename    !< Filename for the vtk file
+!    integer, intent(in), optional :: n_cycle     !< Cycle-number for vtk file (counter)
+!    real(dp), intent(in), optional :: time        !< Time for output file
+!    integer, intent(in), optional :: ixs_cc(:)      !< Oncly include these cell variables
+!    character(len=*), optional, intent(in) :: dir !< Directory to place files in
+!    procedure(subr_add_vars), optional :: add_vars !< Optional routine to add extra variables
+!    character(len=*), intent(in), optional :: add_names(:) !< Names of extra variables
+!
+!    character(len=*), parameter     :: grid_name = "gg", block_prefix = "blk_"
+!    character(len=*), parameter     :: amr_name  = "mesh", meshdir = "data"
+!    character(len=100), allocatable :: grid_list(:), grid_list_block(:)
+!    character(len=100), allocatable :: var_list(:, :), var_names(:)
+!    character(len=400)              :: fname
+!    integer                         :: lvl, i, id, i_grid, iv, nc, n_grids_max
+!    integer                         :: n_cc, n_add, dbix
+!    integer                         :: nx, ny, nx_prev, ny_prev, ix, iy
+!    integer                         :: n_cycle_val
+!    integer                         :: lo(NDIM), hi(NDIM), vlo(NDIM), vhi(NDIM)
+!    integer                         :: blo(NDIM), bhi(NDIM)
+!    logical                         :: lo_bnd(NDIM), hi_bnd(NDIM)
+!    integer, allocatable            :: ids(:), nb_ids(:), icc_val(:)
+!    logical, allocatable            :: box_done(:)
+!    real(dp)                        :: dr(NDIM), r_min(NDIM), time_val
+!#if NDIM == 2
+!    integer, allocatable            :: box_list(:,:), new_box_list(:, :)
+!    real(dp), allocatable           :: var_data(:,:,:), cc(:, :, :)
+!#elif NDIM == 3
+!    integer, allocatable            :: box_list(:,:,:), new_box_list(:,:,:)
+!    real(dp), allocatable           :: var_data(:,:,:,:), cc(:, :, :, :)
+!    integer                         :: nz, nz_prev, iz
+!#endif
+!
+!    if (.not. tree%ready) stop "Tree not ready"
+!    time_val = 0.0_dp; if (present(time)) time_val = time
+!    n_cycle_val = 0; if (present(n_cycle)) n_cycle_val = n_cycle
+!    n_add = 0; if (present(add_names)) n_add = size(add_names)
+!
+!    if (present(add_names) .neqv. present(add_vars)) &
+!         stop "af_write_vtk: both arguments (add_names, add_vars) needed"
+!
+!    if (present(ixs_cc)) then
+!       if (maxval(ixs_cc) > tree%n_var_cell .or. &
+!            minval(ixs_cc) < 1) stop "af_write_silo: wrong indices given (ixs_cc)"
+!       allocate(icc_val(size(ixs_cc)))
+!       icc_val = ixs_cc
+!    else
+!       call get_output_vars(tree, icc_val)
+!    end if
+!
+!    n_cc = size(icc_val)
+!
+!    allocate(var_names(n_cc+n_add))
+!    var_names(1:n_cc) = tree%cc_names(icc_val)
+!
+!    if (present(add_names)) then
+!       var_names(n_cc+1:n_cc+n_add) = add_names(:)
+!    end if
+!
+!    nc = tree%n_cell
+!    n_grids_max = 0
+!    do lvl = 1, tree%highest_lvl
+!       n_grids_max = n_grids_max + size(tree%lvls(lvl)%leaves)
+!    end do
+!
+!    allocate(grid_list(n_grids_max))
+!    allocate(grid_list_block(n_grids_max))
+!    allocate(var_list(n_cc+n_add, n_grids_max))
+!    allocate(box_done(tree%highest_id))
+!    box_done = .false.
+!
+!#if NDIM == 2
+!    allocate(cc(0:nc+1, 0:nc+1, n_cc + n_add))
+!#elif NDIM == 3
+!    allocate(cc(0:nc+1, 0:nc+1, 0:nc+1, n_cc + n_add))
+!#endif
+!
+!    call af_prepend_directory(trim(filename) // ".silo", dir, fname)
+!    call SILO_create_file(trim(fname), dbix)
+!    call SILO_set_time_varying(dbix)
+!    call SILO_mkdir(dbix, meshdir)
+!    i_grid = 0
+!
+!    do lvl = 1, tree%highest_lvl
+!       do i = 1, size(tree%lvls(lvl)%leaves)
+!          id = tree%lvls(lvl)%leaves(i)
+!          if (box_done(id)) cycle
+!
+!          i_grid = i_grid + 1
+!
+!          ! Find largest rectangular box including id and other leaves that
+!          ! haven't been written yet
+!#if NDIM == 2
+!          allocate(box_list(1,1))
+!          box_list(1,1) = id
+!          box_done(id) = .true.
+!          nx = 1
+!          ny = 1
+!
+!          do
+!             nx_prev = nx
+!             ny_prev = ny
+!
+!             ! Check whether we can extend to the -x direction
+!             ids = box_list(1, :)
+!             nb_ids = tree%boxes(ids)%neighbors(af_neighb_lowx)
+!             if (all(nb_ids > af_no_box)) then
+!                if (.not. any(box_done(nb_ids)) .and. &
+!                     tree%boxes(nb_ids(1))%ix(1) < tree%boxes(ids(1))%ix(1) .and. &
+!                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
+!                   nx = nx + 1
+!                   allocate(new_box_list(nx, ny))
+!                   new_box_list(1, :) = nb_ids
+!                   new_box_list(2:, :) = box_list
+!                   box_list = new_box_list
+!                   box_done(nb_ids) = .true.
+!                   deallocate(new_box_list)
+!                end if
+!             end if
+!
+!             ! Check whether we can extend to the +x direction
+!             ids = box_list(nx, :)
+!             nb_ids = tree%boxes(ids)%neighbors(af_neighb_highx)
+!             if (all(nb_ids > af_no_box)) then
+!                if (.not. any(box_done(nb_ids)) .and. &
+!                     tree%boxes(nb_ids(1))%ix(1) > tree%boxes(ids(1))%ix(1) .and. &
+!                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
+!                   nx = nx + 1
+!                   allocate(new_box_list(nx, ny))
+!                   new_box_list(nx, :) = nb_ids
+!                   new_box_list(1:nx-1, :) = box_list
+!                   box_list = new_box_list
+!                   box_done(nb_ids) = .true.
+!                   deallocate(new_box_list)
+!                end if
+!             end if
+!
+!             ! Check whether we can extend to the -y direction
+!             ids = box_list(:, 1)
+!             nb_ids = tree%boxes(ids)%neighbors(af_neighb_lowy)
+!             if (all(nb_ids > af_no_box)) then
+!                if (.not. any(box_done(nb_ids)) .and. &
+!                     tree%boxes(nb_ids(1))%ix(2) < tree%boxes(ids(1))%ix(2) .and. &
+!                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
+!                   ny = ny + 1
+!                   allocate(new_box_list(nx, ny))
+!                   new_box_list(:, 1) = nb_ids
+!                   new_box_list(:, 2:) = box_list
+!                   box_list = new_box_list
+!                   box_done(nb_ids) = .true.
+!                   deallocate(new_box_list)
+!                end if
+!             end if
+!
+!             ! Check whether we can extend to the +y direction
+!             ids = box_list(:, ny)
+!             nb_ids = tree%boxes(ids)%neighbors(af_neighb_highy)
+!             if (all(nb_ids > af_no_box)) then
+!                if (.not. any(box_done(nb_ids)) .and. &
+!                     tree%boxes(nb_ids(1))%ix(2) > tree%boxes(ids(1))%ix(2) .and. &
+!                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
+!                   ny = ny + 1
+!                   allocate(new_box_list(nx, ny))
+!                   new_box_list(:, ny) = nb_ids
+!                   new_box_list(:, 1:ny-1) = box_list
+!                   box_list = new_box_list
+!                   box_done(nb_ids) = .true.
+!                   deallocate(new_box_list)
+!                end if
+!             end if
+!
+!             if (nx == nx_prev .and. ny == ny_prev) exit
+!          end do
+!
+!          ! Check for (periodic) boundaries (this could give problems for
+!          ! complex geometries, e.g. a triangle block)
+!          id     = box_list(1, 1)
+!          lo_bnd = af_is_phys_boundary(tree%boxes, id, af_low_neighbs)
+!
+!          id = box_list(nx, ny)
+!          hi_bnd = af_is_phys_boundary(tree%boxes, id, af_high_neighbs)
+!
+!          lo(:) = 1
+!          where (.not. lo_bnd) lo = lo - 1
+!
+!          hi = [nx, ny] * nc
+!          where (.not. hi_bnd) hi = hi + 1
+!
+!          ! Include ghost cells around internal boundaries
+!          allocate(var_data(lo(1):hi(1), lo(2):hi(2), n_cc+n_add))
+!
+!          do ix = 1, nx
+!             do iy = 1, ny
+!                id = box_list(ix, iy)
+!
+!                cc(:, :, 1:n_cc) = tree%boxes(id)%cc(:, :, icc_val)
+!                if (present(add_vars)) then
+!                   call add_vars(tree%boxes(id), &
+!                        cc(:, :, n_cc+1:n_cc+n_add), n_add)
+!                end if
+!
+!                ! Include ghost cells on internal block boundaries
+!                blo = 1
+!                where ([ix, iy] == 1 .and. .not. lo_bnd) blo = 0
+!
+!                bhi = nc
+!                where ([ix, iy] == [nx, ny] .and. .not. hi_bnd) bhi = nc+1
+!
+!                vlo = blo + ([ix, iy]-1) * nc
+!                vhi = bhi + ([ix, iy]-1) * nc
+!
+!                var_data(vlo(1):vhi(1), vlo(2):vhi(2), :) = &
+!                     cc(blo(1):bhi(1), blo(2):bhi(2), :)
+!             end do
+!          end do
+!
+!          id = box_list(1, 1)
+!          dr = tree%boxes(id)%dr
+!          r_min = tree%boxes(id)%r_min - (1 - lo) * dr
+!
+!          write(grid_list(i_grid), "(A,I0)") meshdir // '/' // grid_name, i_grid
+!          call SILO_add_grid(dbix, grid_list(i_grid), 2, &
+!               hi - lo + 2, r_min, dr, 1-lo, hi - [nx, ny] * nc)
+!          write(grid_list_block(i_grid), "(A,I0)") meshdir // '/' // block_prefix &
+!               // grid_name, i_grid
+!          call SILO_add_grid(dbix, grid_list_block(i_grid), 2, [nx+1, ny+1], &
+!               tree%boxes(id)%r_min, nc*dr, [0, 0], [0, 0])
+!
+!          do iv = 1, n_cc+n_add
+!             write(var_list(iv, i_grid), "(A,I0)") meshdir // '/' // &
+!                  trim(var_names(iv)) // "_", i_grid
+!             call SILO_add_var(dbix, var_list(iv, i_grid), grid_list(i_grid), &
+!                  pack(var_data(:, :, iv), .true.), hi-lo+1)
+!          end do
+!
+!          deallocate(var_data)
+!          deallocate(box_list)
+!#elif NDIM == 3
+!          allocate(box_list(1,1,1))
+!          box_list(1,1,1) = id
+!          nx = 1
+!          ny = 1
+!          nz = 1
+!
+!          do
+!             nx_prev = nx
+!             ny_prev = ny
+!             nz_prev = nz
+!
+!             ! Check whether we can extend to the -x direction
+!             ids = pack(box_list(1, :, :), .true.)
+!             nb_ids = tree%boxes(ids)%neighbors(af_neighb_lowx)
+!             if (all(nb_ids > af_no_box)) then
+!                if (.not. any(box_done(nb_ids)) .and. &
+!                     tree%boxes(nb_ids(1))%ix(1) < tree%boxes(ids(1))%ix(1) .and. &
+!                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
+!                   nx = nx + 1
+!                   allocate(new_box_list(nx, ny, nz))
+!                   new_box_list(1, :, :) = reshape(nb_ids, [ny, nz])
+!                   new_box_list(2:, :, :) = box_list
+!                   box_list = new_box_list
+!                   box_done(nb_ids) = .true.
+!                   deallocate(new_box_list)
+!                end if
+!             end if
+!
+!             ! Check whether we can extend to the +x direction
+!             ids = pack(box_list(nx, :, :), .true.)
+!             nb_ids = tree%boxes(ids)%neighbors(af_neighb_highx)
+!             if (all(nb_ids > af_no_box)) then
+!                if (.not. any(box_done(nb_ids)) .and. &
+!                     tree%boxes(nb_ids(1))%ix(1) > tree%boxes(ids(1))%ix(1) .and. &
+!                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
+!                   nx = nx + 1
+!                   allocate(new_box_list(nx, ny, nz))
+!                   new_box_list(nx, :, :) = reshape(nb_ids, [ny, nz])
+!                   new_box_list(1:nx-1, :, :) = box_list
+!                   box_list = new_box_list
+!                   box_done(nb_ids) = .true.
+!                   deallocate(new_box_list)
+!                end if
+!             end if
+!
+!             ! Check whether we can extend to the -y direction
+!             ids = pack(box_list(:, 1, :), .true.)
+!             nb_ids = tree%boxes(ids)%neighbors(af_neighb_lowy)
+!             if (all(nb_ids > af_no_box)) then
+!                if (.not. any(box_done(nb_ids)) .and. &
+!                     tree%boxes(nb_ids(1))%ix(2) < tree%boxes(ids(1))%ix(2) .and. &
+!                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
+!                   ny = ny + 1
+!                   allocate(new_box_list(nx, ny, nz))
+!                   new_box_list(:, 1, :) = reshape(nb_ids, [nx, nz])
+!                   new_box_list(:, 2:, :) = box_list
+!                   box_list = new_box_list
+!                   box_done(nb_ids) = .true.
+!                   deallocate(new_box_list)
+!                end if
+!             end if
+!
+!             ! Check whether we can extend to the +y direction
+!             ids = pack(box_list(:, ny, :), .true.)
+!             nb_ids = tree%boxes(ids)%neighbors(af_neighb_highy)
+!             if (all(nb_ids > af_no_box)) then
+!                if (.not. any(box_done(nb_ids)) .and. &
+!                     tree%boxes(nb_ids(1))%ix(2) > tree%boxes(ids(1))%ix(2) .and. &
+!                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
+!                   ny = ny + 1
+!                   allocate(new_box_list(nx, ny, nz))
+!                   new_box_list(:, ny, :) = reshape(nb_ids, [nx, nz])
+!                   new_box_list(:, 1:ny-1, :) = box_list
+!                   box_list = new_box_list
+!                   box_done(nb_ids) = .true.
+!                   deallocate(new_box_list)
+!                end if
+!             end if
+!
+!             ! Check whether we can extend to the -z direction
+!             ids = pack(box_list(:, :, 1), .true.)
+!             nb_ids = tree%boxes(ids)%neighbors(af_neighb_lowz)
+!             if (all(nb_ids > af_no_box)) then
+!                if (.not. any(box_done(nb_ids)) .and. &
+!                     tree%boxes(nb_ids(1))%ix(3) < tree%boxes(ids(1))%ix(3) .and. &
+!                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
+!                   nz = nz + 1
+!                   allocate(new_box_list(nx, ny, nz))
+!                   new_box_list(:, :, 1) = reshape(nb_ids, [nx, ny])
+!                   new_box_list(:, :, 2:) = box_list
+!                   box_list = new_box_list
+!                   box_done(nb_ids) = .true.
+!                   deallocate(new_box_list)
+!                end if
+!             end if
+!
+!             ! Check whether we can extend to the +z direction
+!             ids = pack(box_list(:, :, nz), .true.)
+!             nb_ids = tree%boxes(ids)%neighbors(af_neighb_highz)
+!             if (all(nb_ids > af_no_box)) then
+!                if (.not. any(box_done(nb_ids)) .and. &
+!                     tree%boxes(nb_ids(1))%ix(3) > tree%boxes(ids(1))%ix(3) .and. &
+!                     .not. any(af_has_children(tree%boxes(nb_ids)))) then
+!                   nz = nz + 1
+!                   allocate(new_box_list(nx, ny, nz))
+!                   new_box_list(:, :, nz) = reshape(nb_ids, [nx, ny])
+!                   new_box_list(:, :, 1:nz-1) = box_list
+!                   box_list = new_box_list
+!                   box_done(nb_ids) = .true.
+!                   deallocate(new_box_list)
+!                end if
+!             end if
+!
+!             if (nx == nx_prev .and. ny == ny_prev .and. nz == nz_prev) exit
+!          end do
+!
+!          ! Check for (periodic) boundaries (this could give problems for
+!          ! complex geometries, e.g. a triangle block)
+!          id     = box_list(1, 1, 1)
+!          lo_bnd = af_is_phys_boundary(tree%boxes, id, af_low_neighbs)
+!
+!          id = box_list(nx, ny, nz)
+!          hi_bnd = af_is_phys_boundary(tree%boxes, id, af_high_neighbs)
+!
+!          lo(:) = 1
+!          where (.not. lo_bnd) lo = lo - 1
+!
+!          hi = [nx, ny, nz] * nc
+!          where (.not. hi_bnd) hi = hi + 1
+!
+!          ! Include ghost cells around internal boundaries
+!          allocate(var_data(lo(1):hi(1), lo(2):hi(2), lo(3):hi(3), n_cc+n_add))
+!
+!          do iz = 1, nz
+!             do ix = 1, nx
+!                do iy = 1, ny
+!                   id     = box_list(ix, iy, iz)
+!                   cc(:, :, :, 1:n_cc) = tree%boxes(id)%cc(:, :, :, icc_val)
+!                   if (present(add_vars)) then
+!                      call add_vars(tree%boxes(id), &
+!                           cc(:, :, :, n_cc+1:n_cc+n_add), n_add)
+!                   end if
+!
+!                   ! Include ghost cells on internal block boundaries
+!                   blo = 1
+!                   where ([ix, iy, iz] == 1 .and. .not. lo_bnd) blo = 0
+!
+!                   bhi = nc
+!                   where ([ix, iy, iz] == [nx, ny, nz] &
+!                        .and. .not. hi_bnd) bhi = nc+1
+!
+!                   vlo = blo + ([ix, iy, iz]-1) * nc
+!                   vhi = bhi + ([ix, iy, iz]-1) * nc
+!
+!                   var_data(vlo(1):vhi(1), vlo(2):vhi(2), vlo(3):vhi(3), :) = &
+!                        cc(blo(1):bhi(1), blo(2):bhi(2), blo(3):bhi(3), :)
+!                end do
+!             end do
+!          end do
+!
+!          id = box_list(1, 1, 1)
+!          dr = tree%boxes(id)%dr
+!          r_min = tree%boxes(id)%r_min - (1 - lo) * dr
+!
+!          write(grid_list(i_grid), "(A,I0)") meshdir // '/' // grid_name, i_grid
+!          call SILO_add_grid(dbix, grid_list(i_grid), 3, &
+!               hi - lo + 2, r_min, dr, 1-lo, hi-[nx, ny, nz]*nc)
+!          write(grid_list_block(i_grid), "(A,I0)") meshdir // '/' // block_prefix // &
+!               grid_name, i_grid
+!          call SILO_add_grid(dbix, grid_list_block(i_grid), 3, [nx+1, ny+1, nz+1], &
+!               tree%boxes(id)%r_min, nc*dr, [0, 0, 0], [0, 0, 0])
+!
+!          do iv = 1, n_cc+n_add
+!             write(var_list(iv, i_grid), "(A,I0)") meshdir // '/' // &
+!                  trim(var_names(iv)) // "_", i_grid
+!             call SILO_add_var(dbix, var_list(iv, i_grid), grid_list(i_grid), &
+!                  pack(var_data(:, :, :, iv), .true.), hi-lo+1)
+!          end do
+!
+!          deallocate(var_data)
+!          deallocate(box_list)
+!#endif
+!
+!       end do
+!    end do
+!
+!    call SILO_set_mmesh_grid(dbix, amr_name, grid_list(1:i_grid), &
+!         n_cycle_val, time_val)
+!    do iv = 1, n_cc+n_add
+!       call SILO_set_mmesh_var(dbix, trim(var_names(iv)), amr_name, &
+!            var_list(iv, 1:i_grid), n_cycle_val, time_val)
+!    end do
+!
+!    call SILO_set_mmesh_grid(dbix, block_prefix // amr_name, &
+!         grid_list_block(1:i_grid), n_cycle_val, time_val)
+!    call SILO_close_file(dbix)
+!    print *, "af_write_silo: written " // trim(fname)
+!  end subroutine af_write_silo
 
   subroutine get_output_vars(tree, ix_out)
     type(af_t), intent(in)              :: tree

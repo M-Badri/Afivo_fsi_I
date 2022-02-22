@@ -1,20 +1,7 @@
-!!#include "../src/cpp_macros.h"
+#include "cpp_macros.h"
 !> Module to solve elliptic PDEs on the coarse grid. This module contains an
 !> interface to Hypre, assuming Hypre is compiled with OpenMP and without MPI
-#define NDIM 2
-#if NDIM == 2
-#define DTIMES(TXT) TXT, TXT
-#define KJI_DO(lo,hi) j = lo, hi; do i = lo, hi
-#define CLOSE_DO end do
-#define IJK i, j
-#define DIMNAME "2d"
-#elif NDIM == 3
-#define DTIMES(TXT) TXT, TXT, TXT
-#define KJI_DO(lo,hi) k = lo, hi; do j = lo, hi; do i = lo, hi
-#define CLOSE_DO end do; end do
-#define IJK i, j, k
-#define DIMNAME "3d"
-#endif
+
 module m_coarse_solver
   use m_af_types
   use m_mg_types
